@@ -1,6 +1,7 @@
 --[[
 Code written by Shm_kle
 *You may place this lincense block after the code if you desire.*
+github: https://github.com/shmkle/open-source-mirror-for-roblox
 
                     GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
@@ -690,6 +691,9 @@ local cappedFov = math.pi
 local mirrorViewports = {}
 local gameCharacters = {}
 
+local radToDeg = math.deg(1)
+local degToRad = math.rad(1)
+
 -- Initialize
 module.mirrorViewports = mirrorViewports
 module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts: Table?)
@@ -821,7 +825,7 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 									if isR15 then
 										gripWeld.C0 = leftHand.LeftGripAttachment.CFrame
 									else
-										gripWeld.C0 = CFrame.new(0,-1,0)*CFrame.Angles(-math.pi/2,0,0)
+										gripWeld.C0 = CFrame.new(0,-1,0)*CFrame.Angles(-math.pi*0.5,0,0)
 									end
 								end
 							end
@@ -943,11 +947,11 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 	end
 
 	local function VtoHFov(v: number, ratio: number)
-		return 2*math.atan(math.tan(v/2)*ratio) 
+		return 2*math.atan(math.tan(v*0.5)*ratio)
 	end
 	
 	local function HtoVFov(h: number, ratio: number)
-		return 2*math.atan(math.tan(h/2)/ratio) 
+		return 2*math.atan(math.tan(h*0.5)/ratio) 
 	end
 	
 	local function VectorIntersectPoint(vector: Vector3, origin: Vector3)
@@ -969,16 +973,16 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 		local vFov, hFov = 0, 0
 		
 		if xRes > yRes then
-			hFov = camera.MaxAxisFieldOfView
+			hFov = camera.MaxAxisFieldOfView*degToRad
 			vFov = HtoVFov(hFov,aspectRatio)
 		else
-			vFov = camera.MaxAxisFieldOfView
+			vFov = camera.MaxAxisFieldOfView*degToRad
 			hFov = VtoHFov(vFov,aspectRatio)
 		end
 		
 		for _, viewportTable in pairs(mirrorViewports) do
 			local surfaceSize = viewportTable.mirrorPart.Size
-			local surfaceCf = viewportTable.mirrorPart.CFrame*CFrame.new(0,0,-surfaceSize.Z/2)
+			local surfaceCf = viewportTable.mirrorPart.CFrame*CFrame.new(0,0,-surfaceSize.Z*0.5)
 			local pixelPerStud = 1000
 
 			-- calculate crop
@@ -986,7 +990,7 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 			local vectorOrigin = surfaceCf:Inverse()*cameraCF.p
 			
 			if vectorOrigin.Z < 0 then
-				local vTan, hTan = math.tan(vFov/2), math.tan(hFov/2)
+				local vTan, hTan = math.tan(vFov*0.5), math.tan(hFov*0.5)
 
 				local surfaceRot = CFrame.new(surfaceCf.p):Inverse()*surfaceCf
 				local rightVector = (surfaceRot:Inverse()*cameraCF).RightVector
@@ -1035,8 +1039,8 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 				
 				for _, vector in pairs(newVectors) do
 					local hitX, hitY = VectorIntersectPoint(vector,vectorOrigin)
-					hitX = math.clamp(hitX,-surfaceSize.X/2,surfaceSize.X/2)
-					hitY = math.clamp(hitY,-surfaceSize.Y/2,surfaceSize.Y/2)
+					hitX = math.clamp(hitX,-surfaceSize.X*0.5,surfaceSize.X*0.5)
+					hitY = math.clamp(hitY,-surfaceSize.Y*0.5,surfaceSize.Y*0.5)
 
 					maxX = maxX or hitX
 					maxY = maxY or hitY
@@ -1046,10 +1050,10 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 					minX,minY = math.min(hitX,minX),math.min(hitY,minY)
 				end
 				
-				cropped[1] = maxX and math.clamp(surfaceSize.X/2-maxX,0,surfaceSize.X) or 0
-				cropped[2] = maxY and math.clamp(surfaceSize.Y/2-maxY,0,surfaceSize.Y) or 0
-				cropped[3] = minX and math.clamp(surfaceSize.X/2+minX,0,surfaceSize.X) or 0
-				cropped[4] = minY and math.clamp(surfaceSize.Y/2+minY,0,surfaceSize.Y) or 0
+				cropped[1] = maxX and math.clamp(surfaceSize.X*0.5-maxX,0,surfaceSize.X) or 0
+				cropped[2] = maxY and math.clamp(surfaceSize.Y*0.5-maxY,0,surfaceSize.Y) or 0
+				cropped[3] = minX and math.clamp(surfaceSize.X*0.5+minX,0,surfaceSize.X) or 0
+				cropped[4] = minY and math.clamp(surfaceSize.Y*0.5+minY,0,surfaceSize.Y) or 0
 
 				cropped = {
 					cropped[1] or 0,
@@ -1076,8 +1080,8 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 					local n1 = 3
 					local targetSize = croppedToSizeY*aspectRatio
 					local currentSize = croppedToSizeX
-					cropped[n0] -= (targetSize-currentSize)/2
-					cropped[n1] -= (targetSize-currentSize)/2
+					cropped[n0] -= (targetSize-currentSize)*0.5
+					cropped[n1] -= (targetSize-currentSize)*0.5
 					if cropped[n0] < 0 then
 						cropped[n1] += cropped[n0]
 						cropped[n0] = 0 
@@ -1090,8 +1094,8 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 					local n1 = 4
 					local targetSize = croppedToSizeX/aspectRatio
 					local currentSize = croppedToSizeY
-					cropped[n0] -= (targetSize-currentSize)/2
-					cropped[n1] -= (targetSize-currentSize)/2
+					cropped[n0] -= (targetSize-currentSize)*0.5
+					cropped[n1] -= (targetSize-currentSize)*0.5
 					if cropped[n0] < 0 then
 						cropped[n1] += cropped[n0]
 						cropped[n0] = 0 
@@ -1104,30 +1108,30 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 				croppedToSizeX,croppedToSizeY = surfaceSize.X-cropped[1]-cropped[3],surfaceSize.Y-cropped[2]-cropped[4]
 				local croppedSize = Vector3.new(croppedToSizeX,croppedToSizeY,1)
 				viewportTable.cropPart.Size = croppedSize
-				viewportTable.cropPart.CFrame = surfaceCf*CFrame.new(((surfaceSize.X-cropped[1])-(surfaceSize.X-cropped[3]))/2,((surfaceSize.X-cropped[2])-(surfaceSize.X-cropped[4]))/2,0.5)
+				viewportTable.cropPart.CFrame = surfaceCf*CFrame.new(((surfaceSize.X-cropped[1])-(surfaceSize.X-cropped[3]))*0.5,((surfaceSize.X-cropped[2])-(surfaceSize.X-cropped[4]))*0.5,0.5)
 
 				-- cam math
 				local adornee = viewportTable.mirrorPart
 				local adorneeCf = MirrorCFrame(adornee.CFrame)
 				local adorneeSize = adornee.Size
 
-				local surfaceOffset = Vector3.new((adorneeSize.X-cropped[3])-(adorneeSize.X-cropped[1]),(adorneeSize.X-cropped[2])-(adorneeSize.X-cropped[4]),0)/2
+				local surfaceOffset = Vector3.new((adorneeSize.X-cropped[3])-(adorneeSize.X-cropped[1]),(adorneeSize.X-cropped[2])-(adorneeSize.X-cropped[4]),0)*0.5
 
 				local surfaceRot = CFrame.new(adorneeCf.p):Inverse()*adorneeCf
 				adorneeCf = CFrame.new(adorneeCf.p)*surfaceRot
 
-				local surfaceCF = CFrame.new(surfaceRot*surfaceOffset)*adorneeCf*CFrame.new(0,0,-adorneeSize.Z/2)
+				local surfaceCF = CFrame.new(surfaceRot*surfaceOffset)*adorneeCf*CFrame.new(0,0,-adorneeSize.Z*0.5)
 				local surfaceSizeX, surfaceSizeY = adorneeSize.X-cropped[1]-cropped[3],adorneeSize.Y-cropped[2]-cropped[4]
 				local aspectRatio = surfaceSizeX/surfaceSizeY
 
 				local cameraOffset = surfaceCF:Inverse()*FlipPositionFromFace(MirrorCFrame(cameraCF).p,surfaceCF.LookVector,surfaceCF.p) --(surfaceCF:Inverse()*oldCamCF).p*Vector3.new(-1,1,-1)--*CFrame.Angles(0,math.pi,0)
 
-				local rFovAngle = -math.atan2(cameraOffset.X-surfaceSizeX/2,cameraOffset.Z)
-				local lFovAngle = math.atan2(cameraOffset.X+surfaceSizeX/2,cameraOffset.Z)
+				local rFovAngle = -math.atan2(cameraOffset.X-surfaceSizeX*0.5,cameraOffset.Z)
+				local lFovAngle = math.atan2(cameraOffset.X+surfaceSizeX*0.5,cameraOffset.Z)
 				local hMaxFov = math.max(lFovAngle,rFovAngle)*2
 
-				local uFovAngle = -math.atan2(cameraOffset.Y-surfaceSizeY/2,cameraOffset.Z)
-				local dFovAngle = math.atan2(cameraOffset.Y+surfaceSizeY/2,cameraOffset.Z)
+				local uFovAngle = -math.atan2(cameraOffset.Y-surfaceSizeY*0.5,cameraOffset.Z)
+				local dFovAngle = math.atan2(cameraOffset.Y+surfaceSizeY*0.5,cameraOffset.Z)
 				local vMaxFov = math.max(uFovAngle,dFovAngle)*2
 
 				local maxFov = math.min(math.max(HtoVFov(hMaxFov,aspectRatio),vMaxFov),cappedFov)
