@@ -1,5 +1,5 @@
 # open-source-mirror-for-roblox
-I made code for mirrors in roblox and I want to make it open source for everyone.
+I made code for mirrors in Roblox and I want to make it open source for everyone.
 
 License applies.
 
