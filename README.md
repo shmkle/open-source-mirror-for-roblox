@@ -3,5 +3,5 @@ I made code for mirrors in roblox and I want to make it open source for everyone
 
 License applies.
 
-- Example Roblox place (Downloaded): https://www.roblox.com/games/12311440014
+- Example Roblox place (Downloadable): https://www.roblox.com/games/12311440014
 - My Patreon (Donations): https://www.patreon.com/Shmekle
