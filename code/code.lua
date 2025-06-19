@@ -1,683 +1,7 @@
-local module = {}
+warn("mirror module brought to you by shm_kle!")
+print("https://devforum.roblox.com/t/i-made-an-open-source-mirror-module-for-everyone/3731125")
 
-local PlayerService = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local camera = workspace.CurrentCamera
-local playerGui = PlayerService.LocalPlayer.PlayerGui
-local cappedFov = math.pi
-
-local CharacterClassWhitelist = {"Decal", "Motor6D", "Shirt", "Pants", "SpecialMesh", "WrapLayer", "WrapTarget"} -- updates the character when these are added
-local InstanceClassBlacklist = {"SurfaceGui", "ScreenGui", "BillboardGui", "Tool", "LocalScript", "Sound", "AudioEmitter"} -- will be removed from the character
-local mirrorViewports = {}
-local gameCharacters = {}
-
-local radToDeg = math.deg(1)
-local degToRad = math.rad(1)
-
--- Initialize
-module.mirrorViewports = mirrorViewports
-module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts: Table?)
-	worldRoot = worldRoot or workspace
-	
-	local function IsBad(instance: Instance)
-		if table.find(InstanceClassBlacklist, instance.ClassName) then return instance end
-	end
-	
-	local function DestroyBad(parent: Instance)
-		for _, descendant in pairs(parent:GetDescendants()) do
-			if IsBad(descendant) then
-				descendant:Destroy()
-			end
-		end
-		
-		return parent
-	end
-	
-	local function IsInDomain(pos: Vector3)
-		for _, box in ipairs(borderParts or {}) do
-			local cf, halfSize = box.CFrame, box.Size*0.5
-			local offset = cf:Inverse()*pos
-
-			if math.abs(offset.X) < halfSize.X and math.abs(offset.Y) < halfSize.Y and math.abs(offset.Z) < halfSize.Z then
-				return true
-			end
-		end
-		
-		return false
-	end
-	
-	local function DeleteChar(char: Character)
-		for _, viewportTable in ipairs(mirrorViewports) do
-			local mirroredTable = viewportTable.mirrored[char]
-			
-			pcall(function() 
-				for _, connection in pairs(mirroredTable.connections) do connection:Disconnect() end 
-			end)
-			
-			pcall(function() 
-				mirroredTable.clone:Destroy() 
-			end)
-			
-			viewportTable.mirrored[char] = nil
-		end
-	end
-	
-	local function MirrorCFrame(offset: CFrame)
-		local flipCf = CFrame.new(0,0,0,-1,0,0,0,1,0,0,0,1)
-		return flipCf*offset*flipCf:Inverse()
-	end
-
-	local function MirrorCharacter(char: Character, stage: SteppedStage, viewportTable: Table?)
-		-- pre-all viewports
-		
-		if not viewportTable then
-			if not char.PrimaryPart or not IsInDomain(char.PrimaryPart.Position) then
-				DeleteChar(char)
-				return
-			end
-			
-			for _, viewportTable in ipairs(mirrorViewports) do
-				if MirrorCharacter(char, stage, viewportTable) then -- if MirrorCharacter returns true, failure so end loop
-					DeleteChar(char)
-					return
-				end
-			end
-			
-			return
-		end
-		
-		-- post-all viewports
-		
-		-- cloning
-		local mirroredTable = viewportTable.mirrored[char]
-		
-		if not mirroredTable then 
-			local clone = nil
-			local cloneTool = nil
-			local _, msg = pcall(function()
-				local charHum = char:FindFirstChildOfClass("Humanoid")
-				local charAnimator = charHum:FindFirstChildOfClass("Animator")
-
-				char.Archivable = true
-				clone = DestroyBad(char:Clone())
-				clone.Parent = viewportTable.worldModel
-				char.Archivable = false
-
-				local cloneAnims = {}
-				local cloneHum = clone:FindFirstChildOfClass("Humanoid")
-				local cloneAnimator = cloneHum:FindFirstChildOfClass("Animator")
-
-				mirroredTable = {
-					reference = {},
-					connections = {},
-					cloneAnims = cloneAnims,
-					clone = clone,
-					cloneHum = cloneHum,
-					charHum = charHum,
-					cloneAnimator = cloneAnimator,
-					charAnimator = charAnimator
-				}
-				viewportTable.mirrored[char] = mirroredTable
-				
-				local isR15 = cloneHum.RigType == Enum.HumanoidRigType.R15
-
-				for _, part in pairs(char:GetChildren()) do
-					if part:IsA("BasePart") then
-						local r = "Right"
-						local l = "Left"
-						local partName = part.Name
-						local isRight = string.find(partName,r)
-						local isLeft = string.find(partName,l)
-						if isRight or isLeft then
-							local current = isRight and r or l
-							local target = isRight and l or r
-							partName = string.gsub(partName,current,target)
-						end
-
-						local clonePart = clone:FindFirstChild(partName)
-						if clonePart then
-							local m6d0 = isR15 and part:FindFirstChildOfClass("Motor6D")
-							local m6d1 = isR15 and clonePart:FindFirstChildOfClass("Motor6D")
-							if m6d0 and m6d1 then
-								clonePart.Anchored = false
-								local weld = Instance.new("Weld",clonePart)
-								weld.Name = m6d1.Name
-								weld.C0 = m6d1.C0
-								weld.C1 = m6d1.C1
-								weld.Part0 = m6d1.Part0
-								weld.Part1 = clonePart
-								m6d1:Destroy()
-								table.insert(mirroredTable.reference,{
-									part0 = m6d0,
-									part1 = weld,
-									c0 = weld.C0,
-									class = "Motor6d"
-								})
-							else
-								clonePart.Anchored = true
-								table.insert(mirroredTable.reference,{
-									part0 = part,
-									part1 = clonePart,
-									class = "BasePart"
-								})
-							end
-						end
-					end
-				end
-				
-				local function RemoveTool(tool: Tool)
-					if clone and clone.Parent then
-						if tool:IsA("Tool") and cloneTool then
-							cloneTool:Destroy()
-							cloneTool = nil
-						end
-					end
-				end
-				
-				local function GiveTool(tool: Tool)
-					if clone and clone.Parent then
-						if tool:IsA("Tool") then
-							wait()
-							if cloneTool then
-								RemoveTool()
-							end
-							if tool.Parent == char then
-								cloneTool = DestroyBad(tool:Clone())
-								cloneTool.Parent = clone
-								local toolHandle = cloneTool:FindFirstChild("Handle")
-								local rightHand = cloneTool and clone:FindFirstChild(isR15 and "RightHand" or "Right Arm")
-								local leftHand = cloneTool and clone:FindFirstChild(isR15 and "LeftHand" or "Left Arm")
-								local gripWeld = Instance.new("Weld",leftHand)
-								if rightHand and leftHand then
-									gripWeld.Part0 = leftHand
-									gripWeld.Part1 = toolHandle
-									if isR15 then
-										gripWeld.C0 = leftHand.LeftGripAttachment.CFrame
-									else
-										gripWeld.C0 = CFrame.new(0,-1,0)*CFrame.Angles(-math.pi*0.5,0,0)
-									end
-								end
-							end
-						end
-					end
-				end
-				
-				local charTool = char:FindFirstChildOfClass("Tool")
-				
-				if charTool then
-					GiveTool(charTool)
-				end
-				
-				table.insert(mirroredTable.connections,char.ChildAdded:Connect(GiveTool))
-				table.insert(mirroredTable.connections,char.ChildRemoved:Connect(RemoveTool))
-				
-				local function AnimationPlayed(track)
-					if track.Animation:IsA("Animation") then
-						local animId = track.Animation.AnimationId
-						cloneAnims[animId] = {
-							tack0 = track,
-							tack1 = (cloneAnims[animId] or {}).tack1 or cloneAnimator:LoadAnimation(track.Animation)
-						}
-					end
-				end
-				
-				for _, track in pairs(charAnimator:GetPlayingAnimationTracks()) do AnimationPlayed(track) end
-				
-				table.insert(mirroredTable.connections,charAnimator.AnimationPlayed:Connect(AnimationPlayed))
-			end)
-			
-			if msg then -- cloning failed, cleanup
-				return true
-			end
-		end
-		
-		-- apply mirroring
-		if mirroredTable then
-			if stage == 0 then -- animation copy
-				for trackName, tracks in pairs(mirroredTable.cloneAnims) do
-					local track0 = tracks.tack0
-					local track1 = tracks.tack1
-					
-					if track1 then
-						local targetPriority = track0 and track0.Priority or 0
-						local targetTimePosition = track0 and track0.TimePosition or 0
-						local targetWeight = track0 and track0.WeightCurrent or 0
-
-						if targetWeight > 0 and not track1.IsPlaying then
-							track1.Looped = true 
-							track1:Play(0,targetWeight)
-						else
-							track1:AdjustWeight(targetWeight,0)
-						end
-						
-						track1.Priority = targetPriority
-						track1.TimePosition = targetTimePosition
-					end
-				end
-			elseif stage == 1 then -- mirror limbs
-				for _, parts in pairs(mirroredTable.reference) do
-					if parts.class == "Motor6d" then
-						parts.part1.C0 = parts.c0*MirrorCFrame(parts.part0.Transform)
-					elseif parts.class == "BasePart" then
-						parts.part1.CFrame = MirrorCFrame(parts.part0.CFrame)
-					end
-				end
-			end
-		end
-	end
-
-	local function CharacterAdded(char: Character)
-		if not char or table.find(gameCharacters, char) then return end
-		
-		table.insert(gameCharacters, char)
-		local queueUpdate = false
-		
-		local queueStepped = RunService.Stepped:Connect(function()
-			if queueUpdate then 
-				DeleteChar(char) 
-				queueUpdate = false
-			end
-		end)
-		
-		local function UpdatedChar(child)
-			local className = child.ClassName
-			
-			if 
-				child:IsA("Tool") or 
-				child:FindFirstAncestorOfClass("Tool") or 
-				className == "Weld" and not child:FindFirstAncestorOfClass("Accessory") or
-				not table.find(CharacterClassWhitelist, className) 
-			then return end
-			
-			queueUpdate = true
-		end
-		
-		char.DescendantAdded:Connect(UpdatedChar)
-		char.DescendantRemoving:Connect(UpdatedChar)
-		char:GetPropertyChangedSignal("Parent"):Connect(function()
-			if char:IsDescendantOf(worldRoot) then return end
-			
-			table.remove(gameCharacters, table.find(gameCharacters, char))
-			queueStepped:Disconnect()
-			DeleteChar(char)
-		end)
-	end
-
-	local function ReflectPart(part: BasePart, ref: BasePart?)
-		local originalCf = (ref or part).CFrame
-		part.Reflectance = 0
-		part.CFrame = MirrorCFrame(originalCf)
-		return part
-	end
-
-	local function VtoHFov(v: number, ratio: number)
-		return 2*math.atan(math.tan(v*0.5)*ratio)
-	end
-	
-	local function HtoVFov(h: number, ratio: number)
-		return 2*math.atan(math.tan(h*0.5)/ratio) 
-	end
-	
-	local function VectorIntersectPoint(vector: Vector3, origin: Vector3)
-		return -vector.X/vector.Z*origin.Z+origin.X, -vector.Y/vector.Z*origin.Z+origin.Y
-	end
-	
-	local function FlipPositionFromFace(pos: Vector3, vector: Vector3, facepos: Vector3)
-		local faceCF = CFrame.new(facepos,facepos+vector)
-		local offset = faceCF:Inverse()*pos
-		return faceCF*(offset*Vector3.new(1,1,-1))
-	end
-	
-	-- loops
-	
-	RunService.RenderStepped:Connect(function()
-		local cameraCF = camera.CFrame
-		local xRes, yRes = camera.ViewportSize.X, camera.ViewportSize.Y
-		local aspectRatio = xRes/yRes
-		local vFov, hFov = 0, 0
-		
-		if xRes > yRes then
-			hFov = camera.MaxAxisFieldOfView*degToRad
-			vFov = HtoVFov(hFov,aspectRatio)
-		else
-			vFov = camera.MaxAxisFieldOfView*degToRad
-			hFov = VtoHFov(vFov,aspectRatio)
-		end
-		
-		for _, viewportTable in pairs(mirrorViewports) do
-			local surfaceSize = viewportTable.mirrorPart.Size
-			local surfaceCf = viewportTable.mirrorPart.CFrame*CFrame.new(0,0,-surfaceSize.Z*0.5)
-			local pixelPerStud = 1000
-
-			-- calculate crop
-			local cropped = {}
-			local vectorOrigin = surfaceCf:Inverse()*cameraCF.p
-			
-			if vectorOrigin.Z < 0 then
-				local vTan, hTan = math.tan(vFov*0.5), math.tan(hFov*0.5)
-
-				local surfaceRot = CFrame.new(surfaceCf.p):Inverse()*surfaceCf
-				local rightVector = (surfaceRot:Inverse()*cameraCF).RightVector
-				local upVector = (surfaceRot:Inverse()*cameraCF).UpVector
-				local lookVector = (surfaceRot:Inverse()*cameraCF).LookVector
-				local vectors = {
-					(surfaceRot:Inverse()*CFrame.new(cameraCF.p,cameraCF*Vector3.new(-hTan,vTan,-1))).LookVector,
-					(surfaceRot:Inverse()*CFrame.new(cameraCF.p,cameraCF*Vector3.new(hTan,vTan,-1))).LookVector,
-					(surfaceRot:Inverse()*CFrame.new(cameraCF.p,cameraCF*Vector3.new(hTan,-vTan,-1))).LookVector,
-					(surfaceRot:Inverse()*CFrame.new(cameraCF.p,cameraCF*Vector3.new(-hTan,-vTan,-1))).LookVector
-				}
-
-				local maxX,maxY = nil,nil
-				local minX,minY = nil,nil
-				local inView = 1
-				local newVectors = {}
-				
-				for _, vector in pairs(vectors) do
-					if vector.Z < 0 then 
-						local hvX,hvY = VectorIntersectPoint(rightVector,vector)
-						local vvX,vvY = VectorIntersectPoint(upVector,vector)
-						local hVector = Vector3.new(hvX,hvY,0.01).Unit
-						local vVector = Vector3.new(vvX,vvY,0.01).Unit
-						local hInBounds = CFrame.lookAt(Vector3.zero,lookVector,upVector):Inverse()*hVector
-						local vInBounds = CFrame.lookAt(Vector3.zero,lookVector,upVector):Inverse()*vVector
-
-						hInBounds = hInBounds/hInBounds.Z
-						hInBounds = math.abs(hInBounds.X) < hTan+0.01 and math.abs(hInBounds.Y) < vTan+0.01
-
-						vInBounds = vInBounds/vInBounds.Z
-						vInBounds = math.abs(vInBounds.X) < hTan+0.01 and math.abs(vInBounds.Y) < vTan+0.01
-
-						if hInBounds then
-							table.insert(newVectors,hVector)
-						end
-						if vInBounds then
-							table.insert(newVectors,vVector)
-						end
-						if not hInBounds and not vInBounds then
-							table.insert(newVectors,Vector3.new(vector.X/math.abs(vector.X),vector.Y/math.abs(vector.Y),0.01).Unit )
-						end
-					else
-						table.insert(newVectors,vector)
-					end
-				end
-				
-				for _, vector in pairs(newVectors) do
-					local hitX, hitY = VectorIntersectPoint(vector,vectorOrigin)
-					hitX = math.clamp(hitX,-surfaceSize.X*0.5,surfaceSize.X*0.5)
-					hitY = math.clamp(hitY,-surfaceSize.Y*0.5,surfaceSize.Y*0.5)
-
-					maxX = maxX or hitX
-					maxY = maxY or hitY
-					minX = minX or hitX
-					minY = minY or hitY
-					maxX,maxY = math.max(hitX,maxX),math.max(hitY,maxY)
-					minX,minY = math.min(hitX,minX),math.min(hitY,minY)
-				end
-				
-				cropped[1] = maxX and math.clamp(surfaceSize.X*0.5-maxX,0,surfaceSize.X) or 0
-				cropped[2] = maxY and math.clamp(surfaceSize.Y*0.5-maxY,0,surfaceSize.Y) or 0
-				cropped[3] = minX and math.clamp(surfaceSize.X*0.5+minX,0,surfaceSize.X) or 0
-				cropped[4] = minY and math.clamp(surfaceSize.Y*0.5+minY,0,surfaceSize.Y) or 0
-
-				cropped = {
-					cropped[1] or 0,
-					cropped[2] or 0,
-					cropped[3] or 0,
-					cropped[4] or 0,
-				}
-				
-				if inView == 4 or vectorOrigin.Z > 0 then
-					cropped = false
-				end
-			else
-				cropped = false
-			end
-			
-			-- calculate math
-			viewportTable.visible = not not cropped
-			if cropped then
-				local aspectRatio = surfaceSize.X/surfaceSize.Y
-				local croppedToSizeX,croppedToSizeY = surfaceSize.X-cropped[1]-cropped[3],surfaceSize.Y-cropped[2]-cropped[4]
-				
-				if croppedToSizeX/aspectRatio < croppedToSizeY-0.05 then
-					local n0 = 1
-					local n1 = 3
-					local targetSize = croppedToSizeY*aspectRatio
-					local currentSize = croppedToSizeX
-					cropped[n0] -= (targetSize-currentSize)*0.5
-					cropped[n1] -= (targetSize-currentSize)*0.5
-					if cropped[n0] < 0 then
-						cropped[n1] += cropped[n0]
-						cropped[n0] = 0 
-					elseif cropped[n1] < 0 then
-						cropped[n0] += cropped[n1]
-						cropped[n1] = 0 
-					end
-				elseif croppedToSizeY*aspectRatio < croppedToSizeX-0.05 then
-					local n0 = 2
-					local n1 = 4
-					local targetSize = croppedToSizeX/aspectRatio
-					local currentSize = croppedToSizeY
-					cropped[n0] -= (targetSize-currentSize)*0.5
-					cropped[n1] -= (targetSize-currentSize)*0.5
-					if cropped[n0] < 0 then
-						cropped[n1] += cropped[n0]
-						cropped[n0] = 0 
-					elseif cropped[n1] < 0 then
-						cropped[n0] += cropped[n1]
-						cropped[n1] = 0 
-					end
-				end
-
-				croppedToSizeX,croppedToSizeY = surfaceSize.X-cropped[1]-cropped[3],surfaceSize.Y-cropped[2]-cropped[4]
-				local croppedSize = Vector3.new(croppedToSizeX,croppedToSizeY,1)
-				viewportTable.cropPart.Size = croppedSize
-				viewportTable.cropPart.CFrame = surfaceCf*CFrame.new(((surfaceSize.X-cropped[1])-(surfaceSize.X-cropped[3]))*0.5,((surfaceSize.X-cropped[2])-(surfaceSize.X-cropped[4]))*0.5,0.5)
-
-				-- cam math
-				local adornee = viewportTable.mirrorPart
-				local adorneeCf = MirrorCFrame(adornee.CFrame)
-				local adorneeSize = adornee.Size
-
-				local surfaceOffset = Vector3.new((adorneeSize.X-cropped[3])-(adorneeSize.X-cropped[1]),(adorneeSize.X-cropped[2])-(adorneeSize.X-cropped[4]),0)*0.5
-
-				local surfaceRot = CFrame.new(adorneeCf.p):Inverse()*adorneeCf
-				adorneeCf = CFrame.new(adorneeCf.p)*surfaceRot
-
-				local surfaceCF = CFrame.new(surfaceRot*surfaceOffset)*adorneeCf*CFrame.new(0,0,-adorneeSize.Z*0.5)
-				local surfaceSizeX, surfaceSizeY = adorneeSize.X-cropped[1]-cropped[3],adorneeSize.Y-cropped[2]-cropped[4]
-				local aspectRatio = surfaceSizeX/surfaceSizeY
-
-				local cameraOffset = surfaceCF:Inverse()*FlipPositionFromFace(MirrorCFrame(cameraCF).p,surfaceCF.LookVector,surfaceCF.p) --(surfaceCF:Inverse()*oldCamCF).p*Vector3.new(-1,1,-1)--*CFrame.Angles(0,math.pi,0)
-
-				local rFovAngle = -math.atan2(cameraOffset.X-surfaceSizeX*0.5,cameraOffset.Z)
-				local lFovAngle = math.atan2(cameraOffset.X+surfaceSizeX*0.5,cameraOffset.Z)
-				local hMaxFov = math.max(lFovAngle,rFovAngle)*2
-
-				local uFovAngle = -math.atan2(cameraOffset.Y-surfaceSizeY*0.5,cameraOffset.Z)
-				local dFovAngle = math.atan2(cameraOffset.Y+surfaceSizeY*0.5,cameraOffset.Z)
-				local vMaxFov = math.max(uFovAngle,dFovAngle)*2
-
-				local maxFov = math.min(math.max(HtoVFov(hMaxFov,aspectRatio),vMaxFov),cappedFov)
-				local hcappedFov = VtoHFov(cappedFov,aspectRatio)
-				local newCamCF = surfaceCF*CFrame.new(cameraOffset)
-				local hScale =  1+math.abs(cameraOffset.X/surfaceSizeX)*2
-				local vScale =  1+math.abs(cameraOffset.Y/surfaceSizeY)*2
-
-				local viewportOffset = Vector2.new(.5+cameraOffset.X/surfaceSizeX,.5-cameraOffset.Y/surfaceSizeY)
-				viewportTable.viewport.Position = UDim2.new(viewportOffset.X,0,viewportOffset.Y,0)
-				viewportTable.viewport.Size = UDim2.new(0,surfaceSize.X*pixelPerStud,0,surfaceSize.Y*pixelPerStud)
-
-				viewportTable.surfaceGui.CanvasSize = Vector2.new(surfaceSize.X,surfaceSize.Y)*pixelPerStud/math.max(hScale,vScale)
-				viewportTable.originalCF = viewportTable.mirrorPart.CFrame
-				local fustrumScale = .1/math.max(cameraOffset.Z,.1)
-				local fovScale = 1/math.tan(maxFov*0.5)
-
-				viewportTable.camera.CFrame = newCamCF
-				viewportTable.camera.CFrame = newCamCF*CFrame.new(
-					0,0,0,
-					fovScale*fustrumScale,0,0,
-					0,fovScale*fustrumScale,0,
-					0,0,fustrumScale
-				)
-			end
-		end
-	end)
-	
-	RunService.PreAnimation:Connect(function()
-		for _, char in ipairs(gameCharacters) do
-			MirrorCharacter(char,0)
-		end
-	end)
-	
-	RunService.Heartbeat:Connect(function()
-		for _, char in ipairs(gameCharacters) do
-			MirrorCharacter(char,1)
-		end
-	end)
-	
-	-- loading
-
-	local function PartFilter(instance: Instance)
-		local toReturn = true
-
-		-- BasePart property check
-		toReturn = toReturn and pcall(function() 
-			toReturn = toReturn and 
-				instance.Anchored and 
-				instance.Transparency < 1
-		end)
-		
-		if not toReturn then return false end
-
-		-- non-archivable and not-a-character check
-		local character = nil
-		
-		pcall(function()
-			character = instance:FindFirstAncestorOfClass("Model")
-			toReturn = toReturn and character.Archivable
-			character = character:FindFirstChildWhichIsA("Humanoid") and character
-		end)
-		
-		if not toReturn then 
-			CharacterAdded(character)
-			return false 
-		end
-
-		return true
-	end
-
-	local function MirrorAdded(mirrorPart: BasePart)
-		if not mirrorPart:IsA("BasePart") then return end
-		
-		local viewportTable = {
-			mirrorPart = mirrorPart,
-			surfaceGui = Instance.new("SurfaceGui",PlayerService.LocalPlayer.PlayerGui),
-			cropPart = Instance.new("Part",mirrorPart),
-			viewport = Instance.new("ViewportFrame"),
-			camera = Instance.new("Camera"),
-			worldModel = Instance.new("WorldModel"),
-			mirrored = {},
-		}
-		viewportTable.viewport.Parent = viewportTable.surfaceGui
-		viewportTable.camera.Parent = viewportTable.viewport
-		viewportTable.worldModel.Parent = viewportTable.viewport
-
-		viewportTable.camera.FieldOfViewMode = Enum.FieldOfViewMode.Vertical
-		viewportTable.camera.FieldOfView = 90
-
-		viewportTable.surfaceGui.Adornee = viewportTable.cropPart
-		viewportTable.surfaceGui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
-		viewportTable.surfaceGui.PixelsPerStud = 50
-		viewportTable.surfaceGui.ClipsDescendants = true
-		viewportTable.surfaceGui.ResetOnSpawn = false
-		viewportTable.surfaceGui.LightInfluence = 0
-
-		viewportTable.cropPart.Name = "CropPart"
-		viewportTable.cropPart.Anchored = true
-		viewportTable.cropPart.Transparency = 1
-		viewportTable.cropPart.CanCollide = false
-		viewportTable.cropPart.CanQuery = false
-
-		viewportTable.viewport.CurrentCamera = viewportTable.camera
-		viewportTable.viewport.AnchorPoint = Vector2.new(.5,.5)
-		viewportTable.viewport.Size = UDim2.new(1,0,1,0)
-		viewportTable.viewport.BackgroundTransparency = 1
-
-		viewportTable.ChildAdded = function(child: Instance)
-			local clone = ReflectPart(child:Clone())
-			clone.Parent = viewportTable.viewport
-			
-			local physicsCopy = RunService.Heartbeat:Connect(function()
-				if child:IsGrounded() then return end
-				ReflectPart(clone, child)
-			end)
-			
-			child.Changed:Connect(function(property)
-				if property == "Parent" then -- removed check
-					if child:IsDescendantOf(worldRoot) then return end
-					physicsCopy:Disconnect()
-					clone:Destroy()
-				elseif table.find({"Color", "Material", "Transparency", "Size", "Shape", "CFrame"}, property) then -- whitelist properties
-					pcall(function()
-						if property == "CFrame" then
-							ReflectPart(clone, child)
-							return
-						end
-						
-						clone[property] = child[property]
-					end)
-				end
-			end)
-		end
-
-		table.insert(mirrorViewports,viewportTable)
-	end
-	
-	for _, mirrorPart in ipairs(mirrorFolder:GetChildren()) do MirrorAdded(mirrorPart) end
-	
-	mirrorFolder.ChildAdded:Connect(MirrorAdded)
-
-	local function PlayerAdded(ply)
-		CharacterAdded(ply.Character)
-		ply.CharacterAdded:Connect(CharacterAdded)
-	end
-	
-	for _, ply in ipairs(PlayerService:GetPlayers()) do PlayerAdded(ply) end
-	
-	PlayerService.PlayerAdded:Connect(PlayerAdded)
-
-	local descendantOverlapParams = OverlapParams.new()
-	descendantOverlapParams.FilterType = Enum.RaycastFilterType.Include
-	
-	local function CastBoxes(include: BasePart?)
-		RunService.Stepped:Wait()
-		
-		if include and not PartFilter(include) then return end
-		
-		descendantOverlapParams.FilterDescendantsInstances = {include}
-		
-		for _, box in ipairs(borderParts or {}) do
-			for _, child in ipairs(workspace:GetPartBoundsInBox(box.CFrame, box.Size, include and descendantOverlapParams)) do
-				if include or PartFilter(child) then
-					for _, viewportTable in ipairs(mirrorViewports) do 
-						viewportTable.ChildAdded(child) 
-					end
-				end
-			end
-		end
-	end
-	
-	coroutine.wrap(CastBoxes)()
-	worldRoot.DescendantAdded:Connect(CastBoxes)
-end
-
-return module
-
---[[
-Code written by Shm_kle
-*You may place this lincense block after the code if you desire.*
+--[[*You may place this lincense block after the code if you desire.*
 github: https://github.com/shmkle/open-source-mirror-for-roblox
 
                     GNU GENERAL PUBLIC LICENSE
@@ -1355,3 +679,680 @@ the library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.  But first, please read
 <https://www.gnu.org/licenses/why-not-lgpl.html>.
 ]]
+
+local module = {}
+
+local PlayerService = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local camera = workspace.CurrentCamera
+local playerGui = PlayerService.LocalPlayer.PlayerGui
+local cappedFov = math.pi
+
+local CharacterClassWhitelist = {"Decal", "Motor6D", "Shirt", "Pants", "SpecialMesh", "WrapLayer", "WrapTarget"} -- updates the character when these are added
+local InstanceClassBlacklist = {"SurfaceGui", "ScreenGui", "BillboardGui", "Tool", "LocalScript", "Sound", "AudioEmitter"} -- will be removed from the character
+local mirrorViewports = {}
+local gameCharacters = {}
+
+local radToDeg = math.deg(1)
+local degToRad = math.rad(1)
+
+-- Initialize
+module.mirrorViewports = mirrorViewports
+module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts: Table?)
+	worldRoot = worldRoot or workspace
+	
+	local function IsBad(instance: Instance)
+		if table.find(InstanceClassBlacklist, instance.ClassName) then return instance end
+	end
+	
+	local function DestroyBad(parent: Instance)
+		for _, descendant in pairs(parent:GetDescendants()) do
+			if IsBad(descendant) then
+				descendant:Destroy()
+			end
+		end
+		
+		return parent
+	end
+	
+	local function IsInDomain(pos: Vector3)
+		for _, box in ipairs(borderParts or {}) do
+			local cf, halfSize = box.CFrame, box.Size*0.5
+			local offset = cf:Inverse()*pos
+
+			if math.abs(offset.X) < halfSize.X and math.abs(offset.Y) < halfSize.Y and math.abs(offset.Z) < halfSize.Z then
+				return true
+			end
+		end
+		
+		return false
+	end
+	
+	local function DeleteChar(char: Character)
+		for _, viewportTable in ipairs(mirrorViewports) do
+			local mirroredTable = viewportTable.mirrored[char]
+			
+			pcall(function() 
+				for _, connection in pairs(mirroredTable.connections) do connection:Disconnect() end 
+			end)
+			
+			pcall(function() 
+				mirroredTable.clone:Destroy() 
+			end)
+			
+			viewportTable.mirrored[char] = nil
+		end
+	end
+	
+	local function MirrorCFrame(offset: CFrame)
+		local flipCf = CFrame.new(0,0,0,-1,0,0,0,1,0,0,0,1)
+		return flipCf*offset*flipCf:Inverse()
+	end
+
+	local function MirrorCharacter(char: Character, stage: SteppedStage, viewportTable: Table?)
+		-- pre-all viewports
+		
+		if not viewportTable then
+			if not char.PrimaryPart or not IsInDomain(char.PrimaryPart.Position) then
+				DeleteChar(char)
+				return
+			end
+			
+			for _, viewportTable in ipairs(mirrorViewports) do
+				if MirrorCharacter(char, stage, viewportTable) then -- if MirrorCharacter returns true, failure so end loop
+					DeleteChar(char)
+					return
+				end
+			end
+			
+			return
+		end
+		
+		-- post-all viewports
+		
+		-- cloning
+		local mirroredTable = viewportTable.mirrored[char]
+		
+		if not mirroredTable then 
+			local clone = nil
+			local cloneTool = nil
+			local _, msg = pcall(function()
+				local charHum = char:FindFirstChildOfClass("Humanoid")
+				local charAnimator = charHum:FindFirstChildOfClass("Animator")
+
+				char.Archivable = true
+				clone = DestroyBad(char:Clone())
+				clone.Parent = viewportTable.worldModel
+				char.Archivable = false
+
+				local cloneAnims = {}
+				local cloneHum = clone:FindFirstChildOfClass("Humanoid")
+				local cloneAnimator = cloneHum:FindFirstChildOfClass("Animator")
+
+				mirroredTable = {
+					reference = {},
+					connections = {},
+					cloneAnims = cloneAnims,
+					clone = clone,
+					cloneHum = cloneHum,
+					charHum = charHum,
+					cloneAnimator = cloneAnimator,
+					charAnimator = charAnimator
+				}
+				viewportTable.mirrored[char] = mirroredTable
+				
+				local isR15 = cloneHum.RigType == Enum.HumanoidRigType.R15
+
+				for _, part in pairs(char:GetChildren()) do
+					if part:IsA("BasePart") then
+						local r = "Right"
+						local l = "Left"
+						local partName = part.Name
+						local isRight = string.find(partName,r)
+						local isLeft = string.find(partName,l)
+						if isRight or isLeft then
+							local current = isRight and r or l
+							local target = isRight and l or r
+							partName = string.gsub(partName,current,target)
+						end
+
+						local clonePart = clone:FindFirstChild(partName)
+						if clonePart then
+							local m6d0 = isR15 and part:FindFirstChildOfClass("Motor6D")
+							local m6d1 = isR15 and clonePart:FindFirstChildOfClass("Motor6D")
+							if m6d0 and m6d1 then
+								clonePart.Anchored = false
+								local weld = Instance.new("Weld",clonePart)
+								weld.Name = m6d1.Name
+								weld.C0 = m6d1.C0
+								weld.C1 = m6d1.C1
+								weld.Part0 = m6d1.Part0
+								weld.Part1 = clonePart
+								m6d1:Destroy()
+								table.insert(mirroredTable.reference,{
+									part0 = m6d0,
+									part1 = weld,
+									c0 = weld.C0,
+									class = "Motor6d"
+								})
+							else
+								clonePart.Anchored = true
+								table.insert(mirroredTable.reference,{
+									part0 = part,
+									part1 = clonePart,
+									class = "BasePart"
+								})
+							end
+						end
+					end
+				end
+				
+				local function RemoveTool(tool: Tool)
+					if clone and clone.Parent then
+						if tool:IsA("Tool") and cloneTool then
+							cloneTool:Destroy()
+							cloneTool = nil
+						end
+					end
+				end
+				
+				local function GiveTool(tool: Tool)
+					if clone and clone.Parent then
+						if tool:IsA("Tool") then
+							wait()
+							if cloneTool then
+								RemoveTool()
+							end
+							if tool.Parent == char then
+								cloneTool = DestroyBad(tool:Clone())
+								cloneTool.Parent = clone
+								local toolHandle = cloneTool:FindFirstChild("Handle")
+								local rightHand = cloneTool and clone:FindFirstChild(isR15 and "RightHand" or "Right Arm")
+								local leftHand = cloneTool and clone:FindFirstChild(isR15 and "LeftHand" or "Left Arm")
+								local gripWeld = Instance.new("Weld",leftHand)
+								if rightHand and leftHand then
+									gripWeld.Part0 = leftHand
+									gripWeld.Part1 = toolHandle
+									if isR15 then
+										gripWeld.C0 = leftHand.LeftGripAttachment.CFrame
+									else
+										gripWeld.C0 = CFrame.new(0,-1,0)*CFrame.Angles(-math.pi*0.5,0,0)
+									end
+								end
+							end
+						end
+					end
+				end
+				
+				local charTool = char:FindFirstChildOfClass("Tool")
+				
+				if charTool then
+					GiveTool(charTool)
+				end
+				
+				table.insert(mirroredTable.connections,char.ChildAdded:Connect(GiveTool))
+				table.insert(mirroredTable.connections,char.ChildRemoved:Connect(RemoveTool))
+				
+				local function AnimationPlayed(track)
+					if track.Animation:IsA("Animation") then
+						local animId = track.Animation.AnimationId
+						cloneAnims[animId] = {
+							tack0 = track,
+							tack1 = (cloneAnims[animId] or {}).tack1 or cloneAnimator:LoadAnimation(track.Animation)
+						}
+					end
+				end
+				
+				for _, track in pairs(charAnimator:GetPlayingAnimationTracks()) do AnimationPlayed(track) end
+				
+				table.insert(mirroredTable.connections,charAnimator.AnimationPlayed:Connect(AnimationPlayed))
+			end)
+			
+			if msg then -- cloning failed, cleanup
+				return true
+			end
+		end
+		
+		-- apply mirroring
+		if mirroredTable then
+			if stage == 0 then -- animation copy
+				for trackName, tracks in pairs(mirroredTable.cloneAnims) do
+					local track0 = tracks.tack0
+					local track1 = tracks.tack1
+					
+					if track1 then
+						local targetPriority = track0 and track0.Priority or 0
+						local targetTimePosition = track0 and track0.TimePosition or 0
+						local targetWeight = track0 and track0.WeightCurrent or 0
+
+						if targetWeight > 0 and not track1.IsPlaying then
+							track1.Looped = true 
+							track1:Play(0,targetWeight)
+						else
+							track1:AdjustWeight(targetWeight,0)
+						end
+						
+						track1.Priority = targetPriority
+						track1.TimePosition = targetTimePosition
+					end
+				end
+			elseif stage == 1 then -- mirror limbs
+				for _, parts in pairs(mirroredTable.reference) do
+					if parts.class == "Motor6d" then
+						parts.part1.C0 = parts.c0*MirrorCFrame(parts.part0.Transform)
+					elseif parts.class == "BasePart" then
+						parts.part1.CFrame = MirrorCFrame(parts.part0.CFrame)
+					end
+				end
+			end
+		end
+	end
+
+	local function CharacterAdded(char: Character)
+		if not char or table.find(gameCharacters, char) then return end
+		
+		table.insert(gameCharacters, char)
+		local queueUpdate = false
+		
+		local queueStepped = RunService.Stepped:Connect(function()
+			if queueUpdate then 
+				DeleteChar(char) 
+				queueUpdate = false
+			end
+		end)
+		
+		local function UpdatedChar(child)
+			local className = child.ClassName
+			
+			if 
+				child:IsA("Tool") or 
+				child:FindFirstAncestorOfClass("Tool") or 
+				className == "Weld" and not child:FindFirstAncestorOfClass("Accessory") or
+				not table.find(CharacterClassWhitelist, className) 
+			then return end
+			
+			queueUpdate = true
+		end
+		
+		char.DescendantAdded:Connect(UpdatedChar)
+		char.DescendantRemoving:Connect(UpdatedChar)
+		char:GetPropertyChangedSignal("Parent"):Connect(function()
+			if char:IsDescendantOf(worldRoot) then return end
+			
+			table.remove(gameCharacters, table.find(gameCharacters, char))
+			queueStepped:Disconnect()
+			DeleteChar(char)
+		end)
+	end
+
+	local function ReflectPart(part: BasePart, ref: BasePart?)
+		local originalCf = (ref or part).CFrame
+		part.Reflectance = 0
+		part.CFrame = MirrorCFrame(originalCf)
+		return part
+	end
+
+	local function VtoHFov(v: number, ratio: number)
+		return 2*math.atan(math.tan(v*0.5)*ratio)
+	end
+	
+	local function HtoVFov(h: number, ratio: number)
+		return 2*math.atan(math.tan(h*0.5)/ratio) 
+	end
+	
+	local function VectorIntersectPoint(vector: Vector3, origin: Vector3)
+		return -vector.X/vector.Z*origin.Z+origin.X, -vector.Y/vector.Z*origin.Z+origin.Y
+	end
+	
+	local function FlipPositionFromFace(pos: Vector3, vector: Vector3, facepos: Vector3)
+		local faceCF = CFrame.new(facepos,facepos+vector)
+		local offset = faceCF:Inverse()*pos
+		return faceCF*(offset*Vector3.new(1,1,-1))
+	end
+	
+	-- loops
+	
+	RunService.RenderStepped:Connect(function()
+		local cameraCF = camera.CFrame
+		local xRes, yRes = camera.ViewportSize.X, camera.ViewportSize.Y
+		local aspectRatio = xRes/yRes
+		local vFov, hFov = 0, 0
+		
+		if xRes > yRes then
+			hFov = camera.MaxAxisFieldOfView*degToRad
+			vFov = HtoVFov(hFov,aspectRatio)
+		else
+			vFov = camera.MaxAxisFieldOfView*degToRad
+			hFov = VtoHFov(vFov,aspectRatio)
+		end
+		
+		for _, viewportTable in pairs(mirrorViewports) do
+			local surfaceSize = viewportTable.mirrorPart.Size
+			local surfaceCf = viewportTable.mirrorPart.CFrame*CFrame.new(0,0,-surfaceSize.Z*0.5)
+			local pixelPerStud = 1000
+
+			-- calculate crop
+			local cropped = {}
+			local vectorOrigin = surfaceCf:Inverse()*cameraCF.p
+			
+			if vectorOrigin.Z < 0 then
+				local vTan, hTan = math.tan(vFov*0.5), math.tan(hFov*0.5)
+
+				local surfaceRot = CFrame.new(surfaceCf.p):Inverse()*surfaceCf
+				local rightVector = (surfaceRot:Inverse()*cameraCF).RightVector
+				local upVector = (surfaceRot:Inverse()*cameraCF).UpVector
+				local lookVector = (surfaceRot:Inverse()*cameraCF).LookVector
+				local vectors = {
+					(surfaceRot:Inverse()*CFrame.new(cameraCF.p,cameraCF*Vector3.new(-hTan,vTan,-1))).LookVector,
+					(surfaceRot:Inverse()*CFrame.new(cameraCF.p,cameraCF*Vector3.new(hTan,vTan,-1))).LookVector,
+					(surfaceRot:Inverse()*CFrame.new(cameraCF.p,cameraCF*Vector3.new(hTan,-vTan,-1))).LookVector,
+					(surfaceRot:Inverse()*CFrame.new(cameraCF.p,cameraCF*Vector3.new(-hTan,-vTan,-1))).LookVector
+				}
+
+				local maxX,maxY = nil,nil
+				local minX,minY = nil,nil
+				local inView = 1
+				local newVectors = {}
+				
+				for _, vector in pairs(vectors) do
+					if vector.Z < 0 then 
+						local hvX,hvY = VectorIntersectPoint(rightVector,vector)
+						local vvX,vvY = VectorIntersectPoint(upVector,vector)
+						local hVector = Vector3.new(hvX,hvY,0.01).Unit
+						local vVector = Vector3.new(vvX,vvY,0.01).Unit
+						local hInBounds = CFrame.lookAt(Vector3.zero,lookVector,upVector):Inverse()*hVector
+						local vInBounds = CFrame.lookAt(Vector3.zero,lookVector,upVector):Inverse()*vVector
+
+						hInBounds = hInBounds/hInBounds.Z
+						hInBounds = math.abs(hInBounds.X) < hTan+0.01 and math.abs(hInBounds.Y) < vTan+0.01
+
+						vInBounds = vInBounds/vInBounds.Z
+						vInBounds = math.abs(vInBounds.X) < hTan+0.01 and math.abs(vInBounds.Y) < vTan+0.01
+
+						if hInBounds then
+							table.insert(newVectors,hVector)
+						end
+						if vInBounds then
+							table.insert(newVectors,vVector)
+						end
+						if not hInBounds and not vInBounds then
+							table.insert(newVectors,Vector3.new(vector.X/math.abs(vector.X),vector.Y/math.abs(vector.Y),0.01).Unit )
+						end
+					else
+						table.insert(newVectors,vector)
+					end
+				end
+				
+				for _, vector in pairs(newVectors) do
+					local hitX, hitY = VectorIntersectPoint(vector,vectorOrigin)
+					hitX = math.clamp(hitX,-surfaceSize.X*0.5,surfaceSize.X*0.5)
+					hitY = math.clamp(hitY,-surfaceSize.Y*0.5,surfaceSize.Y*0.5)
+
+					maxX = maxX or hitX
+					maxY = maxY or hitY
+					minX = minX or hitX
+					minY = minY or hitY
+					maxX,maxY = math.max(hitX,maxX),math.max(hitY,maxY)
+					minX,minY = math.min(hitX,minX),math.min(hitY,minY)
+				end
+				
+				cropped[1] = maxX and math.clamp(surfaceSize.X*0.5-maxX,0,surfaceSize.X) or 0
+				cropped[2] = maxY and math.clamp(surfaceSize.Y*0.5-maxY,0,surfaceSize.Y) or 0
+				cropped[3] = minX and math.clamp(surfaceSize.X*0.5+minX,0,surfaceSize.X) or 0
+				cropped[4] = minY and math.clamp(surfaceSize.Y*0.5+minY,0,surfaceSize.Y) or 0
+
+				cropped = {
+					cropped[1] or 0,
+					cropped[2] or 0,
+					cropped[3] or 0,
+					cropped[4] or 0,
+				}
+				
+				if inView == 4 or vectorOrigin.Z > 0 then
+					cropped = false
+				end
+			else
+				cropped = false
+			end
+			
+			-- calculate math
+			viewportTable.visible = not not cropped
+			if cropped then
+				local aspectRatio = surfaceSize.X/surfaceSize.Y
+				local croppedToSizeX,croppedToSizeY = surfaceSize.X-cropped[1]-cropped[3],surfaceSize.Y-cropped[2]-cropped[4]
+				
+				if croppedToSizeX/aspectRatio < croppedToSizeY-0.05 then
+					local n0 = 1
+					local n1 = 3
+					local targetSize = croppedToSizeY*aspectRatio
+					local currentSize = croppedToSizeX
+					cropped[n0] -= (targetSize-currentSize)*0.5
+					cropped[n1] -= (targetSize-currentSize)*0.5
+					if cropped[n0] < 0 then
+						cropped[n1] += cropped[n0]
+						cropped[n0] = 0 
+					elseif cropped[n1] < 0 then
+						cropped[n0] += cropped[n1]
+						cropped[n1] = 0 
+					end
+				elseif croppedToSizeY*aspectRatio < croppedToSizeX-0.05 then
+					local n0 = 2
+					local n1 = 4
+					local targetSize = croppedToSizeX/aspectRatio
+					local currentSize = croppedToSizeY
+					cropped[n0] -= (targetSize-currentSize)*0.5
+					cropped[n1] -= (targetSize-currentSize)*0.5
+					if cropped[n0] < 0 then
+						cropped[n1] += cropped[n0]
+						cropped[n0] = 0 
+					elseif cropped[n1] < 0 then
+						cropped[n0] += cropped[n1]
+						cropped[n1] = 0 
+					end
+				end
+
+				croppedToSizeX,croppedToSizeY = surfaceSize.X-cropped[1]-cropped[3],surfaceSize.Y-cropped[2]-cropped[4]
+				local croppedSize = Vector3.new(croppedToSizeX,croppedToSizeY,1)
+				viewportTable.cropPart.Size = croppedSize
+				viewportTable.cropPart.CFrame = surfaceCf*CFrame.new(((surfaceSize.X-cropped[1])-(surfaceSize.X-cropped[3]))*0.5,((surfaceSize.X-cropped[2])-(surfaceSize.X-cropped[4]))*0.5,0.5)
+
+				-- cam math
+				local adornee = viewportTable.mirrorPart
+				local adorneeCf = MirrorCFrame(adornee.CFrame)
+				local adorneeSize = adornee.Size
+
+				local surfaceOffset = Vector3.new((adorneeSize.X-cropped[3])-(adorneeSize.X-cropped[1]),(adorneeSize.X-cropped[2])-(adorneeSize.X-cropped[4]),0)*0.5
+
+				local surfaceRot = CFrame.new(adorneeCf.p):Inverse()*adorneeCf
+				adorneeCf = CFrame.new(adorneeCf.p)*surfaceRot
+
+				local surfaceCF = CFrame.new(surfaceRot*surfaceOffset)*adorneeCf*CFrame.new(0,0,-adorneeSize.Z*0.5)
+				local surfaceSizeX, surfaceSizeY = adorneeSize.X-cropped[1]-cropped[3],adorneeSize.Y-cropped[2]-cropped[4]
+				local aspectRatio = surfaceSizeX/surfaceSizeY
+
+				local cameraOffset = surfaceCF:Inverse()*FlipPositionFromFace(MirrorCFrame(cameraCF).p,surfaceCF.LookVector,surfaceCF.p) --(surfaceCF:Inverse()*oldCamCF).p*Vector3.new(-1,1,-1)--*CFrame.Angles(0,math.pi,0)
+
+				local rFovAngle = -math.atan2(cameraOffset.X-surfaceSizeX*0.5,cameraOffset.Z)
+				local lFovAngle = math.atan2(cameraOffset.X+surfaceSizeX*0.5,cameraOffset.Z)
+				local hMaxFov = math.max(lFovAngle,rFovAngle)*2
+
+				local uFovAngle = -math.atan2(cameraOffset.Y-surfaceSizeY*0.5,cameraOffset.Z)
+				local dFovAngle = math.atan2(cameraOffset.Y+surfaceSizeY*0.5,cameraOffset.Z)
+				local vMaxFov = math.max(uFovAngle,dFovAngle)*2
+
+				local maxFov = math.min(math.max(HtoVFov(hMaxFov,aspectRatio),vMaxFov),cappedFov)
+				local hcappedFov = VtoHFov(cappedFov,aspectRatio)
+				local newCamCF = surfaceCF*CFrame.new(cameraOffset)
+				local hScale =  1+math.abs(cameraOffset.X/surfaceSizeX)*2
+				local vScale =  1+math.abs(cameraOffset.Y/surfaceSizeY)*2
+
+				local viewportOffset = Vector2.new(.5+cameraOffset.X/surfaceSizeX,.5-cameraOffset.Y/surfaceSizeY)
+				viewportTable.viewport.Position = UDim2.new(viewportOffset.X,0,viewportOffset.Y,0)
+				viewportTable.viewport.Size = UDim2.new(0,surfaceSize.X*pixelPerStud,0,surfaceSize.Y*pixelPerStud)
+
+				viewportTable.surfaceGui.CanvasSize = Vector2.new(surfaceSize.X,surfaceSize.Y)*pixelPerStud/math.max(hScale,vScale)
+				viewportTable.originalCF = viewportTable.mirrorPart.CFrame
+				local fustrumScale = .1/math.max(cameraOffset.Z,.1)
+				local fovScale = 1/math.tan(maxFov*0.5)
+
+				viewportTable.camera.CFrame = newCamCF
+				viewportTable.camera.CFrame = newCamCF*CFrame.new(
+					0,0,0,
+					fovScale*fustrumScale,0,0,
+					0,fovScale*fustrumScale,0,
+					0,0,fustrumScale
+				)
+			end
+		end
+	end)
+	
+	RunService.PreAnimation:Connect(function()
+		for _, char in ipairs(gameCharacters) do
+			MirrorCharacter(char,0)
+		end
+	end)
+	
+	RunService.Heartbeat:Connect(function()
+		for _, char in ipairs(gameCharacters) do
+			MirrorCharacter(char,1)
+		end
+	end)
+	
+	-- loading
+
+	local function PartFilter(instance: Instance)
+		local toReturn = true
+
+		-- BasePart property check
+		toReturn = toReturn and pcall(function() 
+			toReturn = toReturn and 
+				instance.Anchored and 
+				instance.Transparency < 1
+		end)
+		
+		if not toReturn then return false end
+
+		-- non-archivable and not-a-character check
+		local character = nil
+		
+		pcall(function()
+			character = instance:FindFirstAncestorOfClass("Model")
+			toReturn = toReturn and character.Archivable
+			character = character:FindFirstChildWhichIsA("Humanoid") and character
+		end)
+		
+		if not toReturn then 
+			CharacterAdded(character)
+			return false 
+		end
+
+		return true
+	end
+
+	local function MirrorAdded(mirrorPart: BasePart)
+		if not mirrorPart:IsA("BasePart") then return end
+		
+		local viewportTable = {
+			mirrorPart = mirrorPart,
+			surfaceGui = Instance.new("SurfaceGui",PlayerService.LocalPlayer.PlayerGui),
+			cropPart = Instance.new("Part",mirrorPart),
+			viewport = Instance.new("ViewportFrame"),
+			camera = Instance.new("Camera"),
+			worldModel = Instance.new("WorldModel"),
+			mirrored = {},
+		}
+		viewportTable.viewport.Parent = viewportTable.surfaceGui
+		viewportTable.camera.Parent = viewportTable.viewport
+		viewportTable.worldModel.Parent = viewportTable.viewport
+
+		viewportTable.camera.FieldOfViewMode = Enum.FieldOfViewMode.Vertical
+		viewportTable.camera.FieldOfView = 90
+
+		viewportTable.surfaceGui.Adornee = viewportTable.cropPart
+		viewportTable.surfaceGui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+		viewportTable.surfaceGui.PixelsPerStud = 50
+		viewportTable.surfaceGui.ClipsDescendants = true
+		viewportTable.surfaceGui.ResetOnSpawn = false
+		viewportTable.surfaceGui.LightInfluence = 0
+
+		viewportTable.cropPart.Name = "CropPart"
+		viewportTable.cropPart.Anchored = true
+		viewportTable.cropPart.Transparency = 1
+		viewportTable.cropPart.CanCollide = false
+		viewportTable.cropPart.CanQuery = false
+
+		viewportTable.viewport.CurrentCamera = viewportTable.camera
+		viewportTable.viewport.AnchorPoint = Vector2.new(.5,.5)
+		viewportTable.viewport.Size = UDim2.new(1,0,1,0)
+		viewportTable.viewport.BackgroundTransparency = 1
+
+		viewportTable.ChildAdded = function(child: Instance)
+			local clone = ReflectPart(child:Clone())
+			clone.Parent = viewportTable.viewport
+			
+			local physicsCopy = RunService.Heartbeat:Connect(function()
+				if child:IsGrounded() then return end
+				ReflectPart(clone, child)
+			end)
+			
+			child.Changed:Connect(function(property)
+				if property == "Parent" then -- removed check
+					if child:IsDescendantOf(worldRoot) then return end
+					physicsCopy:Disconnect()
+					clone:Destroy()
+				elseif table.find({"Color", "Material", "Transparency", "Size", "Shape", "CFrame"}, property) then -- whitelist properties
+					pcall(function()
+						if property == "CFrame" then
+							ReflectPart(clone, child)
+							return
+						end
+						
+						clone[property] = child[property]
+					end)
+				end
+			end)
+		end
+
+		table.insert(mirrorViewports,viewportTable)
+	end
+	
+	for _, mirrorPart in ipairs(mirrorFolder:GetChildren()) do MirrorAdded(mirrorPart) end
+	
+	mirrorFolder.ChildAdded:Connect(MirrorAdded)
+
+	local function PlayerAdded(ply)
+		CharacterAdded(ply.Character)
+		ply.CharacterAdded:Connect(CharacterAdded)
+	end
+	
+	for _, ply in ipairs(PlayerService:GetPlayers()) do PlayerAdded(ply) end
+	
+	PlayerService.PlayerAdded:Connect(PlayerAdded)
+
+	local descendantOverlapParams = OverlapParams.new()
+	descendantOverlapParams.FilterType = Enum.RaycastFilterType.Include
+	
+	local function CastBoxes(include: BasePart?)
+		RunService.Stepped:Wait()
+		
+		if include and not PartFilter(include) then return end
+		
+		descendantOverlapParams.FilterDescendantsInstances = {include}
+		
+		for _, box in ipairs(borderParts or {}) do
+			for _, child in ipairs(workspace:GetPartBoundsInBox(box.CFrame, box.Size, include and descendantOverlapParams)) do
+				if include or PartFilter(child) then
+					for _, viewportTable in ipairs(mirrorViewports) do 
+						viewportTable.ChildAdded(child) 
+					end
+				end
+			end
+		end
+	end
+	
+	coroutine.wrap(CastBoxes)()
+	worldRoot.DescendantAdded:Connect(CastBoxes)
+end
+
+return module
