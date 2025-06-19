@@ -268,7 +268,7 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 	end
 
 	local function CharacterAdded(char: Character)
-		if table.find(gameCharacters, char) then return end
+		if not char or table.find(gameCharacters, char) then return end
 		
 		table.insert(gameCharacters, char)
 		local queueUpdate = false
@@ -551,12 +551,13 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 		
 		if not toReturn then return false end
 
-		-- not-a-character check
+		-- non-archivable and not-a-character check
 		local character = nil
 		
 		pcall(function()
 			character = instance:FindFirstAncestorOfClass("Model")
 			toReturn = toReturn and character.Archivable
+			character = character:FindFirstChildWhichIsA("Humanoid") and character
 		end)
 		
 		if not toReturn then 
@@ -614,15 +615,13 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 			end)
 			
 			child.Changed:Connect(function(property)
-				if table.find({"Anchored"}, property) then -- blacklist properties
-					return
-				elseif property == "parent" then -- removed check
+				if property == "Parent" then -- removed check
 					if child:IsDescendantOf(worldRoot) then return end
 					physicsCopy:Disconnect()
 					clone:Destroy()
-				else -- properties copy
+				elseif table.find({"Color", "Material", "Transparency", "Size", "Shape", "CFrame"}, property) then -- whitelist properties
 					pcall(function()
-						if property == "CFrame" or property == "Position" or property == "Rotation" then
+						if property == "CFrame" then
 							ReflectPart(clone, child)
 							return
 						end
@@ -641,7 +640,7 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 	mirrorFolder.ChildAdded:Connect(MirrorAdded)
 
 	local function PlayerAdded(ply)
-		if ply.Character then CharacterAdded(ply.Character) end
+		CharacterAdded(ply.Character)
 		ply.CharacterAdded:Connect(CharacterAdded)
 	end
 	
@@ -656,10 +655,11 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 		RunService.Stepped:Wait()
 		
 		if include and not PartFilter(include) then return end
-
+		
 		descendantOverlapParams.FilterDescendantsInstances = {include}
+		
 		for _, box in ipairs(borderParts or {}) do
-			for _, child in ipairs(workspace:GetPartBoundsInBox(box.CFrame,box.Size,include and descendantOverlapParams)) do
+			for _, child in ipairs(workspace:GetPartBoundsInBox(box.CFrame, box.Size, include and descendantOverlapParams)) do
 				if include or PartFilter(child) then
 					for _, viewportTable in ipairs(mirrorViewports) do 
 						viewportTable.ChildAdded(child) 
@@ -669,7 +669,7 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 		end
 	end
 	
-	CastBoxes()
+	coroutine.wrap(CastBoxes)()
 	worldRoot.DescendantAdded:Connect(CastBoxes)
 end
 
