@@ -1,12 +1,14 @@
 local module = {}
+
 local PlayerService = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-
 local camera = workspace.CurrentCamera
 local playerGui = PlayerService.LocalPlayer.PlayerGui
 local cappedFov = math.pi
 
+local CharacterClassWhitelist = {"Decal", "Motor6D", "Shirt", "Pants", "SpecialMesh", "WrapLayer", "WrapTarget"} -- updates the character when these are added
+local InstanceClassBlacklist = {"SurfaceGui", "ScreenGui", "BillboardGui", "Tool", "LocalScript", "Sound", "AudioEmitter"} -- will be removed from the character
 local mirrorViewports = {}
 local gameCharacters = {}
 
@@ -18,31 +20,79 @@ module.mirrorViewports = mirrorViewports
 module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts: Table?)
 	worldRoot = worldRoot or workspace
 	
+	local function IsBad(instance: Instance)
+		if table.find(InstanceClassBlacklist, instance.ClassName) then return instance end
+	end
+	
+	local function DestroyBad(parent: Instance)
+		for _, descendant in pairs(parent:GetDescendants()) do
+			if IsBad(descendant) then
+				descendant:Destroy()
+			end
+		end
+		
+		return parent
+	end
+	
+	local function IsInDomain(pos: Vector3)
+		for _, box in ipairs(borderParts or {}) do
+			local cf, halfSize = box.CFrame, box.Size*0.5
+			local offset = cf:Inverse()*pos
+
+			if math.abs(offset.X) < halfSize.X and math.abs(offset.Y) < halfSize.Y and math.abs(offset.Z) < halfSize.Z then
+				return true
+			end
+		end
+		
+		return false
+	end
+	
+	local function DeleteChar(char: Character)
+		for _, viewportTable in ipairs(mirrorViewports) do
+			local mirroredTable = viewportTable.mirrored[char]
+			
+			pcall(function() 
+				for _, connection in pairs(mirroredTable.connections) do connection:Disconnect() end 
+			end)
+			
+			pcall(function() 
+				mirroredTable.clone:Destroy() 
+			end)
+			
+			viewportTable.mirrored[char] = nil
+		end
+	end
+	
 	local function MirrorCFrame(offset: CFrame)
 		local flipCf = CFrame.new(0,0,0,-1,0,0,0,1,0,0,0,1)
 		return flipCf*offset*flipCf:Inverse()
 	end
 
 	local function MirrorCharacter(char: Character, stage: SteppedStage, viewportTable: Table?)
+		-- pre-all viewports
+		
 		if not viewportTable then
-			for _, viewportTable in ipairs(mirrorViewports) do
-				MirrorCharacter(char, stage, viewportTable)
+			if not char.PrimaryPart or not IsInDomain(char.PrimaryPart.Position) then
+				DeleteChar(char)
+				return
 			end
+			
+			for _, viewportTable in ipairs(mirrorViewports) do
+				if MirrorCharacter(char, stage, viewportTable) then -- if MirrorCharacter returns true, failure so end loop
+					DeleteChar(char)
+					return
+				end
+			end
+			
 			return
 		end
 		
-		local function DestroyBad(parent: Instance)
-			for _, descendant in pairs(parent:GetDescendants()) do
-				local class = descendant.ClassName
-				if descendant:IsA("GuiBase") or class == "Tool" or class == "LocalScript" or class == "Sound" then
-					descendant:Destroy()
-				end
-			end
-			return parent
-		end
+		-- post-all viewports
 		
+		-- cloning
 		local mirroredTable = viewportTable.mirrored[char]
-		if not mirroredTable then -- cloning
+		
+		if not mirroredTable then 
 			local clone = nil
 			local cloneTool = nil
 			local _, msg = pcall(function()
@@ -68,7 +118,8 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 					cloneAnimator = cloneAnimator,
 					charAnimator = charAnimator
 				}
-
+				viewportTable.mirrored[char] = mirroredTable
+				
 				local isR15 = cloneHum.RigType == Enum.HumanoidRigType.R15
 
 				for _, part in pairs(char:GetChildren()) do
@@ -174,16 +225,14 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 				for _, track in pairs(charAnimator:GetPlayingAnimationTracks()) do AnimationPlayed(track) end
 				
 				table.insert(mirroredTable.connections,charAnimator.AnimationPlayed:Connect(AnimationPlayed))
-				viewportTable.mirrored[char] = mirroredTable
 			end)
 			
 			if msg then -- cloning failed, cleanup
-				pcall(function() clone:Destroy() end)
-				pcall(function() cloneTool:Destroy() end)
-				pcall(function() for _, connection in pairs(mirroredTable.connections) do connection:Disconnect() end end)
-				mirroredTable = nil
+				return true
 			end
 		end
+		
+		-- apply mirroring
 		if mirroredTable then
 			if stage == 0 then -- animation copy
 				for trackName, tracks in pairs(mirroredTable.cloneAnims) do
@@ -222,28 +271,26 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 		if table.find(gameCharacters, char) then return end
 		
 		table.insert(gameCharacters, char)
+		local queueUpdate = false
 		
-		local function DeleteChar()
-			for _, viewportTable in ipairs(mirrorViewports) do
-				local mirroredTable = viewportTable.mirrored[char] or {}
-				pcall(function() 
-					for _, connection in pairs(mirroredTable.connections) do connection:Disconnect() end 
-				end)
-				pcall(function() 
-					mirroredTable.clone:Destroy() 
-				end)
-				viewportTable.mirrored[char] = nil
+		local queueStepped = RunService.Stepped:Connect(function()
+			if queueUpdate then 
+				DeleteChar(char) 
+				queueUpdate = false
 			end
-		end
+		end)
 		
 		local function UpdatedChar(child)
-			if
-				child:IsA("Tool") or child:FindFirstAncestorOfClass("Tool") or
-				not table.find({"Decal","Motor6D","Shirt","Pants","SpecialMesh"}, child.ClassName)
-				
+			local className = child.ClassName
+			
+			if 
+				child:IsA("Tool") or 
+				child:FindFirstAncestorOfClass("Tool") or 
+				className == "Weld" and not child:FindFirstAncestorOfClass("Accessory") or
+				not table.find(CharacterClassWhitelist, className) 
 			then return end
 			
-			DeleteChar()
+			queueUpdate = true
 		end
 		
 		char.DescendantAdded:Connect(UpdatedChar)
@@ -251,15 +298,14 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 		char:GetPropertyChangedSignal("Parent"):Connect(function()
 			if char:IsDescendantOf(worldRoot) then return end
 			
-			table.remove(gameCharacters,table.find(gameCharacters,char))
-			DeleteChar()
+			table.remove(gameCharacters, table.find(gameCharacters, char))
+			queueStepped:Disconnect()
+			DeleteChar(char)
 		end)
-		
-		MirrorCharacter(char)
 	end
 
-	local function ReflectPart(part: BasePart)
-		local originalCf = part.CFrame
+	local function ReflectPart(part: BasePart, ref: BasePart?)
+		local originalCf = (ref or part).CFrame
 		part.Reflectance = 0
 		part.CFrame = MirrorCFrame(originalCf)
 		return part
@@ -510,7 +556,7 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 		
 		pcall(function()
 			character = instance:FindFirstAncestorOfClass("Model")
-			toReturn = toReturn and not character:FindFirstChildWhichIsA("Humanoid")
+			toReturn = toReturn and character.Archivable
 		end)
 		
 		if not toReturn then 
@@ -562,10 +608,28 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 			local clone = ReflectPart(child:Clone())
 			clone.Parent = viewportTable.viewport
 			
-			child:GetPropertyChangedSignal("Parent"):Connect(function()
-				if child:IsDescendantOf(worldRoot) then return end
-				
-				clone:Destroy()
+			local physicsCopy = RunService.Heartbeat:Connect(function()
+				if child:IsGrounded() then return end
+				ReflectPart(clone, child)
+			end)
+			
+			child.Changed:Connect(function(property)
+				if table.find({"Anchored"}, property) then -- blacklist properties
+					return
+				elseif property == "parent" then -- removed check
+					if child:IsDescendantOf(worldRoot) then return end
+					physicsCopy:Disconnect()
+					clone:Destroy()
+				else -- properties copy
+					pcall(function()
+						if property == "CFrame" or property == "Position" or property == "Rotation" then
+							ReflectPart(clone, child)
+							return
+						end
+						
+						clone[property] = child[property]
+					end)
+				end
 			end)
 		end
 
@@ -608,6 +672,8 @@ module.New = function(mirrorFolder: Instance, worldRoot: Instance?, borderParts:
 	CastBoxes()
 	worldRoot.DescendantAdded:Connect(CastBoxes)
 end
+
+return module
 
 --[[
 Code written by Shm_kle
@@ -1289,6 +1355,3 @@ the library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.  But first, please read
 <https://www.gnu.org/licenses/why-not-lgpl.html>.
 ]]
-
-
-return module
